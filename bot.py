@@ -1,111 +1,125 @@
-import json
+import telebot
+import cloudscraper
 import pandas as pd
 import os
 
-# Пути к файлам
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CSV_PATH = os.path.join(BASE_DIR, 'data', 'swgoh_counters_5v5_all.csv')
+TOKEN = os.environ.get("TOKEN")
+if not TOKEN:
+    print("❌ Токен не найден!")
+    exit()
 
-# Для локального теста — игрок из файла
-PLAYER_JSON = r"D:\Пользователи\Artem\Downloads\player.json"
+bot = telebot.TeleBot(TOKEN)
+scraper = cloudscraper.create_scraper()
 
-print("=" * 60)
-print("🤖 SWGOH COUNTER BOT — ТЕСТОВЫЙ ЗАПУСК")
-print("=" * 60)
-
-# 1. Загружаем игрока из JSON
-print("\n📥 Загружаем данные игрока...")
-with open(PLAYER_JSON, 'r', encoding='utf-8') as f:
-    player_data = json.load(f)
-
-player_units = set()
-for unit in player_data.get('units', []):
-    base_id = unit.get('data', {}).get('base_id', '')
-    if base_id:
-        player_units.add(base_id)
-
-player_name = player_data.get('data', {}).get('name', 'Игрок')
-print(f"   👤 {player_name}")
-print(f"   📦 Юнитов: {len(player_units)}")
-
-# 2. Загружаем базу контр-пиков
-print(f"\n📚 Загружаем базу контр-пиков...")
-if not os.path.exists(CSV_PATH):
-    # Пробуем из загрузок
-    CSV_PATH = r"D:\Пользователи\Artem\Downloads\swgoh_counters_5v5_all.csv"
-
-print(f"   Путь: {CSV_PATH}")
+# Загружаем базу контр-пиков
+print("📚 Загрузка базы...")
+CSV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'swgoh_counters_5v5_all.csv')
 df = pd.read_csv(CSV_PATH, sep=';')
-print(f"   Загружено: {len(df)} контр-пиков")
-print(f"   Колонки: {list(df.columns)}")
+print(f"   {len(df)} контр-пиков")
 
-# 3. Ищем подходящие пачки
-print(f"\n🔍 Подбираем пачки...")
-best_teams = []
+BABY_YODA_STICKER = "CAACAgIAAxkBAAFLZAFqH9yQ3u_cEJspnqed1pFf-FRnnQAChwIAAladvQpC7XQrQFfQkDsE"
 
-for _, row in df.iterrows():
-    attacker_ids = [
-        str(row.get('Атакующий_1_ID', '')).strip(),
-        str(row.get('Атакующий_2_ID', '')).strip(),
-        str(row.get('Атакующий_3_ID', '')).strip(),
-        str(row.get('Атакующий_4_ID', '')).strip(),
-        str(row.get('Атакующий_5_ID', '')).strip()
-    ]
+def get_player_units(allycode):
+    """Получает список base_id юнитов игрока через cloudscraper"""
+    url = f"https://swgoh.gg/api/player/{allycode}/"
+    resp = scraper.get(url)
+    if resp.status_code != 200:
+        return None, None
     
-    owned = [uid for uid in attacker_ids if uid in player_units]
-    missing = [uid for uid in attacker_ids if uid not in player_units]
+    data = resp.json()
+    player_name = data.get('data', {}).get('name', 'Игрок')
+    units = set()
     
-    if len(owned) >= 3:
-        best_teams.append({
-            'ids': attacker_ids,
-            'owned': len(owned),
-            'missing': missing,
-            'winrate': int(row.get('Винрейт_%', 0)),
-            'defender': str(row.get('Лидер_Защиты_Name', '')),
-            'season': str(row.get('Сезон', ''))
-        })
+    for unit in data.get('units', []):
+        base_id = unit.get('data', {}).get('base_id', '')
+        if base_id:
+            units.add(base_id)
+    
+    return player_name, units
 
-# Сортировка: сначала полные (5/5), потом по винрейту
-best_teams.sort(key=lambda x: (-x['owned'], -x['winrate']))
+@bot.message_handler(commands=['start'])
+def start(message):
+    bot.send_sticker(message.chat.id, BABY_YODA_STICKER)
+    bot.send_message(
+        message.chat.id,
+        "🎯 *SWGOH Counter Bot*\n\nОтправь свой код союзника:",
+        parse_mode="Markdown"
+    )
 
-print(f"\n✅ Найдено пачек: {len(best_teams)}")
+@bot.message_handler(func=lambda m: m.text and m.text.strip().isdigit() and len(m.text.strip()) == 9)
+def handle_allycode(message):
+    allycode = message.text.strip()
+    bot.send_message(message.chat.id, f"🔍 Ищу игрока {allycode}...")
+    
+    player_name, player_units = get_player_units(allycode)
+    
+    if not player_units:
+        bot.send_message(message.chat.id, "❌ Игрок не найден")
+        return
+    
+    bot.send_message(
+        message.chat.id,
+        f"👤 *{player_name}*\n📦 Юнитов: {len(player_units)}",
+        parse_mode="Markdown"
+    )
+    
+    best_teams = []
+    for _, row in df.iterrows():
+        attacker_ids = [
+            str(row.get('Атакующий_1_ID', '')).strip(),
+            str(row.get('Атакующий_2_ID', '')).strip(),
+            str(row.get('Атакующий_3_ID', '')).strip(),
+            str(row.get('Атакующий_4_ID', '')).strip(),
+            str(row.get('Атакующий_5_ID', '')).strip()
+        ]
+        
+        owned = [uid for uid in attacker_ids if uid in player_units]
+        missing = [uid for uid in attacker_ids if uid not in player_units]
+        
+        if len(owned) >= 3:
+            best_teams.append({
+                'owned': len(owned),
+                'missing': missing,
+                'winrate': int(row.get('Винрейт_%', 0)),
+                'defender': str(row.get('Лидер_Защиты_Name', '')),
+                'season': str(row.get('Сезон', ''))
+            })
+    
+    best_teams.sort(key=lambda x: (-x['owned'], -x['winrate']))
+    
+    if best_teams:
+        response = "🎯 *ЛУЧШИЕ ПАЧКИ:*\n\n"
+        
+        # Топ-5: сначала полные, потом 4/5
+        shown = 0
+        for t in best_teams:
+            if t['owned'] >= 4 and shown < 5:
+                status = "✅" if t['owned'] == 5 else "🟡"
+                response += f"{status} *[{t['winrate']}%]* Против: {t['defender']}\n"
+                if t['missing']:
+                    response += f"   Не хватает: {t['missing'][0]}\n"
+                response += f"   {t['owned']}/5 | {t['season']}\n\n"
+                shown += 1
+        
+        # Если нет 5 пачек 4+/5, добавляем 3/5
+        if shown < 5:
+            for t in best_teams:
+                if t['owned'] == 3 and shown < 5:
+                    response += f"🔴 *[{t['winrate']}%]* Против: {t['defender']}\n"
+                    response += f"   Не хватает: {', '.join(t['missing'][:2])}\n"
+                    response += f"   3/5 | {t['season']}\n\n"
+                    shown += 1
+        
+        response += "💎 *Больше пачек в MiniApp!*"
+    else:
+        response = "😔 Не нашлось пачек"
+    
+    bot.send_message(message.chat.id, response, parse_mode="Markdown")
 
-# 4. Вывод результатов
-print(f"\n{'='*60}")
-print(f"🎯 ЛУЧШИЕ ПАЧКИ ДЛЯ {player_name.upper()}")
-print(f"{'='*60}")
+@bot.message_handler(func=lambda m: True)
+def other(message):
+    bot.send_message(message.chat.id, "Отправь 9-значный код союзника")
 
-# Статистика
-full = sum(1 for t in best_teams if t['owned'] == 5)
-almost = sum(1 for t in best_teams if t['owned'] == 4)
-in_progress = sum(1 for t in best_teams if t['owned'] == 3)
-
-print(f"\n✅ Полные (5/5): {full}")
-print(f"🟡 Почти готовы (4/5): {almost}")
-print(f"🔴 В процессе (3/5): {in_progress}")
-
-print(f"\n--- ТОП-5 ПОЛНЫХ ---")
-count = 0
-for t in best_teams:
-    if t['owned'] == 5:
-        count += 1
-        print(f"{count}. [{t['winrate']}%] Против: {t['defender']}")
-        print(f"   Сезон: {t['season']}")
-        if count >= 5:
-            break
-
-if count == 0:
-    print("   Нет полных пачек")
-
-print(f"\n--- ТОП-5 ПОЧТИ ГОТОВЫХ (4/5) ---")
-count = 0
-for t in best_teams:
-    if t['owned'] == 4:
-        count += 1
-        print(f"{count}. [{t['winrate']}%] Против: {t['defender']}")
-        print(f"   Не хватает: {t['missing'][0] if t['missing'] else '?'}")
-        if count >= 5:
-            break
-
-print(f"\n{'='*60}")
-print("✅ ТЕСТ УСПЕШНО ЗАВЕРШЁН!")
+if __name__ == "__main__":
+    print("🤖 Бот запущен!")
+    bot.polling(none_stop=True)
