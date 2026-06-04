@@ -5,26 +5,28 @@ from flask import Flask, request
 
 TOKEN = os.environ.get('TOKEN')
 
-# threaded=False — критично для Vercel, чтобы микро-лямбда не засыпала раньше времени
+# threaded=False — критично для Vercel
 bot = telebot.TeleBot(TOKEN, threaded=False)
 app = Flask(__name__)
 
-# Твоя НОВАЯ ссылка на Google Apps Script
+# Твоя ссылка на Google Apps Script
 PROXY_URL = "https://script.google.com/macros/s/AKfycbzthYdqRVx3k_Jd5uFybY-OffTup5Qu4kYeG-4dDSvHepMnrCsvpPU_XS9etscixK-y/exec"
 
 def get_json_via_proxy(ally_code):
     try:
-        # Передаем код союзника в параметре ?code=...
         payload = {'code': ally_code}
-        
-        # Google всегда делает 302 редирект, requests обработает его сам.
-        # Ставим таймаут 8 секунд, чтобы уложиться в лимиты бесплатного Vercel (10 сек).
         response = requests.get(PROXY_URL, params=payload, timeout=8)
         
         if response.status_code == 200:
-            res_json = response.json()
+            # Безопасный парсинг JSON, чтобы бот не падал при ошибке гугла
+            try:
+                res_json = response.json()
+            except ValueError:
+                # Если пришёл HTML вместо JSON — выводим его в лог
+                bad_text = response.text[:200].replace('<', '&lt;').replace('>', '&gt;')
+                return None, f"⚠️ Гугл вернул НЕ JSON!\nСтатус: 200 OK\nОтвет сервера:\n{bad_text}"
             
-            # Проверяем, не вернул ли сам гугл-скрипт ошибку (блок catch в JS)
+            # Проверяем внутреннюю ошибку скрипта (блок catch в JS)
             if isinstance(res_json, dict) and 'error' in res_json:
                 return None, f"Ошибка внутри Google Script:\n{res_json['error']}"
                 
@@ -37,7 +39,6 @@ def get_json_via_proxy(ally_code):
 
 @app.route('/')
 def index():
-    # Авто-сетап вебхука при заходе на главную страницу
     webhook_url = f"https://api.telegram.org/bot{TOKEN}/setWebhook?url=https://swgoh-packs.vercel.app/{TOKEN}"
     try:
         res = requests.get(webhook_url, timeout=5)
@@ -50,7 +51,6 @@ def webhook():
     if request.headers.get('content-type') == 'application/json':
         json_string = request.get_data().decode('utf-8')
         update = telebot.types.Update.de_json(json_string)
-        # Обрабатываем синхронно в основном потоке Flask
         bot.process_new_updates([update])
         return 'OK', 200
     else:
@@ -62,7 +62,6 @@ def start_message(message):
 
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
-    # Очищаем текст от дефисов и пробелов
     clean_text = message.text.strip().replace('-', '').replace(' ', '')
     
     if clean_text.isdigit() and len(clean_text) == 9:
@@ -74,7 +73,6 @@ def handle_message(message):
         bot.send_message(message.chat.id, f"⚙️ Лог отладки:\n{debug_info}")
         
         if data:
-            # Парсим стандартный JSON от swgoh.gg
             player_data = data.get('data', {})
             name = player_data.get('name', 'Неизвестный')
             gp = player_data.get('galactic_power', 0)
