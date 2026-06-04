@@ -1,43 +1,40 @@
 import os
+# Импортируем особую версию requests, которая умеет косить под браузер
+from curl_cffi import requests as requests_cffi
 import requests
 import telebot
 from flask import Flask, request
 
 TOKEN = os.environ.get('TOKEN')
 
-# threaded=False — критично для Vercel, чтобы микро-лямбда не засыпала раньше времени
+# threaded=False — критично для Vercel
 bot = telebot.TeleBot(TOKEN, threaded=False)
 app = Flask(__name__)
 
-# Твоя СВЕЖАЯ ссылка на Google Apps Script (без маскировки под браузер)
-PROXY_URL = "https://script.google.com/macros/s/AKfycbzxSpO8PJtUXs6PTNptwG9aHK2JQDy3BbFunVbn1b39rNBNy8I8sV_UslLb5scVR3gz/exec"
-
-def get_json_via_proxy(ally_code):
+def get_json_direct(ally_code):
     try:
-        payload = {'code': ally_code}
-        response = requests.get(PROXY_URL, params=payload, timeout=8)
+        url = f"https://swgoh.gg/api/player/{ally_code}/"
+        
+        # impersonate="chrome120" — заставляет библиотеку полностью скопировать
+        # сетевой отпечаток (JA3/TLS) реального браузера Chrome.
+        response = requests_cffi.get(url, impersonate="chrome120", timeout=9)
         
         if response.status_code == 200:
             try:
                 res_json = response.json()
+                return res_json, "Успешно! Cloudflare пройден напрямую с Vercel."
             except ValueError:
-                # Если Cloudflare всё равно поймал скрипт — выводим HTML заглушку
                 bad_text = response.text[:200].replace('<', '&lt;').replace('>', '&gt;')
-                return None, f"⚠️ Гугл вернул НЕ JSON!\nСтатус: 200 OK\nОтвет сервера:\n{bad_text}"
-            
-            # Проверяем внутреннюю ошибку скрипта (блок catch в JS)
-            if isinstance(res_json, dict) and 'error' in res_json:
-                return None, f"Ошибка внутри Google Script:\n{res_json['error']}"
+                return None, f"⚠️ Сервер ответил не JSON!\nОтвет:\n{bad_text}"
                 
-            return res_json, "Успешно! Данные получены через Google-прокси."
-        
-        return None, f"Ошибка макроса Google!\nСтатус-код: {response.status_code}\nОтвет: {response.text[:100]}"
+        return None, f"🛑 Ошибка сайта!\nСтатус-код: {response.status_code}\nОтвет: {response.text[:100]}"
         
     except Exception as e:
-        return None, f"Критическая ошибка при вызове прокси:\n{str(e)}"
+        return None, f"Критическая ошибка curl_cffi:\n{str(e)}"
 
 @app.route('/')
 def index():
+    # Используем обычный requests для телеграма, там блокировок нет
     webhook_url = f"https://api.telegram.org/bot{TOKEN}/setWebhook?url=https://swgoh-packs.vercel.app/{TOKEN}"
     try:
         res = requests.get(webhook_url, timeout=5)
@@ -57,18 +54,17 @@ def webhook():
 
 @bot.message_handler(commands=['start'])
 def start_message(message):
-    bot.send_message(message.chat.id, "Привет! Отправь мне код союзника (9 цифр), я достану инфу из swgoh.gg через прокси.")
+    bot.send_message(message.chat.id, "Привет! Отправь мне код союзника, я достану инфу напрямую через curl_cffi.")
 
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     clean_text = message.text.strip().replace('-', '').replace(' ', '')
     
     if clean_text.isdigit() and len(clean_text) == 9:
-        bot.send_message(message.chat.id, "⏳ Стучусь в Google Прокси...")
+        bot.send_message(message.chat.id, "⏳ Маскируюсь под Chrome и иду на swgoh.gg...")
         
-        data, debug_info = get_json_via_proxy(clean_text)
+        data, debug_info = get_json_direct(clean_text)
         
-        # Выводим отладочный лог в чат
         bot.send_message(message.chat.id, f"⚙️ Лог отладки:\n{debug_info}")
         
         if data:
@@ -81,6 +77,6 @@ def handle_message(message):
                 f"🏆 **Данные игрока**\n\nНик: `{name}`\nГалактическая мощь: `{gp:,}`"
             )
         else:
-            bot.send_message(message.chat.id, "❌ Не удалось прочитать JSON. Проверь лог отладки выше.")
+            bot.send_message(message.chat.id, "❌ Не удалось распарсить данные.")
     else:
-        bot.send_message(message.chat.id, "Пожалуйста, введи корректный код союзника (9 цифр без букв).")
+        bot.send_message(message.chat.id, "Пожалуйста, введи корректный код союзника (9 цифр).")
