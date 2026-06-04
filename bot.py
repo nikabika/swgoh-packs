@@ -1,6 +1,6 @@
 import telebot
 import cloudscraper
-import pandas as pd
+import csv
 import os
 
 TOKEN = os.environ.get("TOKEN")
@@ -11,12 +11,47 @@ if not TOKEN:
 bot = telebot.TeleBot(TOKEN)
 scraper = cloudscraper.create_scraper()
 
+# Загружаем CSV без pandas
 print("📚 Загрузка базы...")
 CSV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'swgoh_counters_5v5_all.csv')
-df = pd.read_csv(CSV_PATH, sep=';')
-print(f"✅ {len(df)} контр-пиков загружено")
+
+counters = []
+with open(CSV_PATH, 'r', encoding='utf-8-sig') as f:
+    reader = csv.DictReader(f, delimiter=';')
+    for row in reader:
+        counters.append({
+            'defender': row.get('Лидер_Защиты_Name', ''),
+            'attacker_1': row.get('Атакующий_1_ID', '').strip(),
+            'attacker_2': row.get('Атакующий_2_ID', '').strip(),
+            'attacker_3': row.get('Атакующий_3_ID', '').strip(),
+            'attacker_4': row.get('Атакующий_4_ID', '').strip(),
+            'attacker_5': row.get('Атакующий_5_ID', '').strip(),
+            'winrate': int(row.get('Винрейт_%', 0)),
+            'season': row.get('Сезон', '')
+        })
+
+print(f"✅ {len(counters)} контр-пиков загружено")
 
 BABY_YODA_STICKER = "CAACAgIAAxkBAAFLZAFqH9yQ3u_cEJspnqed1pFf-FRnnQAChwIAAladvQpC7XQrQFfQkDsE"
+
+def find_best_teams(player_units):
+    results = []
+    for c in counters:
+        ids = [c['attacker_1'], c['attacker_2'], c['attacker_3'], c['attacker_4'], c['attacker_5']]
+        owned = [x for x in ids if x in player_units]
+        missing = [x for x in ids if x not in player_units]
+        
+        if len(owned) >= 3:
+            results.append({
+                'owned': len(owned),
+                'missing': missing,
+                'winrate': c['winrate'],
+                'defender': c['defender'],
+                'season': c['season']
+            })
+    
+    results.sort(key=lambda x: (-x['owned'], -x['winrate']))
+    return results
 
 @bot.message_handler(commands=['start'])
 def start(message):
@@ -51,28 +86,7 @@ def handle_allycode(message):
         
         bot.send_message(message.chat.id, f"👤 *{player_name}*\n📦 Юнитов: {len(player_units)}", parse_mode="Markdown")
         
-        teams = []
-        for _, row in df.iterrows():
-            ids = [
-                str(row["Атакующий_1_ID"]).strip(),
-                str(row["Атакующий_2_ID"]).strip(),
-                str(row["Атакующий_3_ID"]).strip(),
-                str(row["Атакующий_4_ID"]).strip(),
-                str(row["Атакующий_5_ID"]).strip()
-            ]
-            owned = [x for x in ids if x in player_units]
-            missing = [x for x in ids if x not in player_units]
-            
-            if len(owned) >= 3:
-                teams.append({
-                    "owned": len(owned),
-                    "missing": missing,
-                    "winrate": int(row["Винрейт_%"]),
-                    "defender": str(row["Лидер_Защиты_Name"]),
-                    "season": str(row["Сезон"])
-                })
-        
-        teams.sort(key=lambda x: (-x["owned"], -x["winrate"]))
+        teams = find_best_teams(player_units)
         
         if not teams:
             bot.send_message(message.chat.id, "😔 Не нашлось пачек")
@@ -82,16 +96,16 @@ def handle_allycode(message):
         shown = 0
         
         for t in teams:
-            if t["owned"] >= 4 and shown < 5:
-                s = "✅" if t["owned"] == 5 else "🟡"
+            if t['owned'] >= 4 and shown < 5:
+                s = "✅" if t['owned'] == 5 else "🟡"
                 text += f"{s} *[{t['winrate']}%]* Против: {t['defender']}\n"
-                if t["missing"]:
+                if t['missing']:
                     text += f"   Не хватает: {t['missing'][0]}\n"
                 text += f"   {t['owned']}/5 | {t['season']}\n\n"
                 shown += 1
         
         for t in teams:
-            if t["owned"] == 3 and shown < 5:
+            if t['owned'] == 3 and shown < 5:
                 text += f"🔴 *[{t['winrate']}%]* Против: {t['defender']}\n"
                 text += f"   Не хватает: {', '.join(t['missing'][:2])}\n"
                 text += f"   3/5 | {t['season']}\n\n"
