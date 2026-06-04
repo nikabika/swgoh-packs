@@ -1,3 +1,2 @@
 pyTelegramBotAPI
-Flask
 curl_cffi
