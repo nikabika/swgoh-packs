@@ -24,7 +24,13 @@ def get_json(ally_code):
 
 @app.route('/')
 def index():
-    return "OK"
+    # Пробиваем блокировку: Vercel сам отправит запрос к API Телеграма
+    webhook_url = f"https://api.telegram.org/bot{TOKEN}/setWebhook?url=https://swgoh-packs.vercel.app/{TOKEN}"
+    try:
+        res = requests.get(webhook_url, timeout=10)
+        return f"Ответ от Telegram: {res.text}"
+    except Exception as e:
+        return f"Ошибка при отправке запроса: {e}"
 
 @app.route(f'/{TOKEN}', methods=['POST'])
 def webhook():
