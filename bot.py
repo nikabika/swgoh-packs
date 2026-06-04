@@ -19,14 +19,12 @@ def get_json(ally_code):
         response = requests.get(url, headers=headers, timeout=20)
         
         if response.status_code == 200:
-            return response.json(), f"✅ Успешно! swgoh.gg ответил кодом 200."
+            return response.json(), "Успешно! swgoh.gg ответил кодом 200."
         
-        # Если код не 200, забираем кусок ответа для отладки
-        debug_text = response.text[:200].replace('<', '&lt;').replace('>', '&gt;')
-        return None, f"❌ Ошибка swgoh.gg!\nСтатус-код: {response.status_code}\nОтвет сервера: {debug_text}"
+        return None, f"Ошибка swgoh.gg!\nСтатус-код: {response.status_code}\nОтвет сервера (первые 200 симв): {response.text[:200]}"
         
     except Exception as e:
-        return None, f"💥 Критическая ошибка сети/кода:\n{str(e)}"
+        return None, f"Критическая ошибка сети/кода:\n{str(e)}"
 
 @app.route('/')
 def index():
@@ -56,20 +54,19 @@ def handle_message(message):
     text = message.text.strip().replace('-', '')
     
     if text.isdigit() and len(text) == 9:
-        bot.send_message(message.chat.id, "🔍 Проверяю код союзника, отправляю запрос на swgoh.gg...")
+        bot.send_message(message.chat.id, "Проверяю код союзника...")
         
-        # Получаем и данные, и строку отладки
         data, debug_info = get_json(text)
         
-        # Сразу выплёскиваем отладку в чат
-        bot.send_message(message.chat.id, f"⚙️ **Лог отладки:**\n{debug_info}", parse_mode="HTML")
+        # Отправляем лог чистым текстом без parse_mode, это на 100% застрахует от крэша телеги
+        bot.send_message(message.chat.id, f" Настройки отладки:\n{debug_info}")
         
         if data:
             player_data = data.get('data', {})
             name = player_data.get('name', 'Неизвестный')
             gp = player_data.get('galactic_power', 0)
-            bot.send_message(message.chat.id, f"🏆 **Данные игрока:**\nНик: {name}\nГМ: {gp:,}")
+            bot.send_message(message.chat.id, f"Данные игрока:\nНик: {name}\nГМ: {gp}")
         else:
-            bot.send_message(message.chat.id, "⚠️ Данные получить не удалось. Посмотри лог отладки выше, там написана причина.")
+            bot.send_message(message.chat.id, "Данные получить не удалось. Причина в сообщении отладки выше.")
     else:
         bot.send_message(message.chat.id, "Введи корректный код союзника (9 цифр).")
