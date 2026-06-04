@@ -1,7 +1,7 @@
 import os
 import telebot
 from telebot import types
-from curl_cffi import requests
+import requests
 from flask import Flask, request
 
 app = Flask(__name__)
@@ -10,16 +10,12 @@ TOKEN = os.environ.get('TOKEN')
 bot = telebot.TeleBot(TOKEN)
 
 STICKER_ID = "CAACAgQAAxkBAAFLabBqIBwnSUz-vGApyE_p53Tlu7tAwgAC4hIAAuddKVNvXRcxXhhEwTsE"
+GAS_URL = "https://script.google.com/macros/s/AKfycbwSCwPlaeY-Gyv6L29A2uwDSFdsXeHOjp8IBYKptYwJxENA5voERRZequIDNgNvdPba/exec"
 user_states = {}
 
-def get_json(url):
+def get_json(ally_code):
     try:
-        headers = {
-            "Accept": "application/json",
-            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
-            "Referer": "https://swgoh.gg/"
-        }
-        response = requests.get(url, headers=headers, impersonate="chrome", timeout=15)
+        response = requests.get(f"{GAS_URL}?code={ally_code}", timeout=25)
         return response.json() if response.status_code == 200 else None
     except:
         return None
@@ -49,9 +45,7 @@ def handle_ally_code(message):
         return
 
     search_msg = bot.send_message(chat_id, "Поиск профиля...")
-    url = f"https://swgoh.gg/api/player/{ally_code}/"
-    
-    data = get_json(url)
+    data = get_json(ally_code)
     
     if data:
         p = data.get('data', data)
