@@ -1,103 +1,59 @@
 import os
-import telebot
-from telebot import types
 import requests
+import telebot
 from flask import Flask, request
-
-app = Flask(__name__)
 
 TOKEN = os.environ.get('TOKEN')
 bot = telebot.TeleBot(TOKEN)
-
-STICKER_ID = "CAACAgQAAxkBAAFLabBqIBwnSUz-vGApyE_p53Tlu7tAwgAC4hIAAuddKVNvXRcxXhhEwTsE"
-GAS_URL = "https://script.google.com/macros/s/AKfycbwSCwPlaeY-Gyv6L29A2uwDSFdsXeHOjp8IBYKptYwJxENA5voERRZequIDNgNvdPba/exec"
-user_states = {}
+app = Flask(__name__)
 
 def get_json(ally_code):
     try:
-        response = requests.get(f"{GAS_URL}?code={ally_code}", timeout=25)
-        return response.json() if response.status_code == 200 else None
-    except:
+        url = f"https://swgoh.gg/api/player/{ally_code}/"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+            'Accept': 'application/json',
+            'Referer': 'https://swgoh.gg/'
+        }
+        response = requests.get(url, headers=headers, timeout=20)
+        if response.status_code == 200:
+            return response.json()
         return None
-
-@bot.message_handler(commands=['start'])
-def send_welcome(message):
-    chat_id = message.chat.id
-    user_states[chat_id] = 'waiting_for_ally_code'
-    bot.send_sticker(chat_id, STICKER_ID)
-    bot.send_message(chat_id, "Отправь мне свой код союзника")
-
-@bot.message_handler(func=lambda msg: user_states.get(msg.chat.id) == 'waiting_for_ally_code')
-def handle_ally_code(message):
-    chat_id = message.chat.id
-    raw_text = message.text
-
-    ally_code = "".join(filter(str.isdigit, raw_text))
-
-    error_text = (
-        "Код союзника введен неверно. Посмотри его в игре:\n"
-        "Профиль — внизу по центру, под сводкой арены флота.\n\n"
-        "Отправь код повторно."
-    )
-
-    if not ally_code or len(ally_code) != 9:
-        bot.send_message(chat_id, error_text)
-        return
-
-    search_msg = bot.send_message(chat_id, "Поиск профиля...")
-    data = get_json(ally_code)
-    
-    if data:
-        p = data.get('data', data)
-        player_name = p.get('name', 'Игрок')
-        
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        btn_yes = types.InlineKeyboardButton("Да", callback_data=f"yes_{ally_code}")
-        btn_no = types.InlineKeyboardButton("Нет", callback_data="no")
-        markup.add(btn_yes, btn_no)
-
-        bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=search_msg.message_id,
-            text=f"Нашел! {player_name} — это ты?",
-            reply_markup=markup
-        )
-        user_states[chat_id] = None
-    else:
-        bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=search_msg.message_id,
-            text="Не удалось получить данные. Проверь код или попробуй позже."
-        )
-
-@bot.callback_query_handler(func=lambda call: True)
-def handle_buttons(call):
-    chat_id = call.message.chat.id
-    if call.data.startswith("yes_"):
-        ally_code = call.data.split("_")[1]
-        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=f"Профиль {ally_code} успешно привязан.")
-    elif call.data == "no":
-        user_states[chat_id] = 'waiting_for_ally_code'
-        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text="Отправь корректный код союзника:")
+    except Exception:
+        return None
 
 @app.route('/')
 def index():
-    return "OK", 200
+    return "OK"
 
 @app.route(f'/{TOKEN}', methods=['POST'])
 def webhook():
     if request.headers.get('content-type') == 'application/json':
         json_string = request.get_data().decode('utf-8')
-        update = types.Update.de_json(json_string)
+        update = telebot.types.Update.de_json(json_string)
         bot.process_new_updates([update])
-        return '', 200
+        return ''
     else:
         return 'Forbidden', 403
 
-if __name__ == '__main__':
-    bot.remove_webhook()
-    RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL')
-    if RENDER_URL:
-        bot.set_webhook(url=f"{RENDER_URL}/{TOKEN}")
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+@bot.message_handler(commands=['start'])
+def start_message(message):
+    bot.send_message(message.chat.id, "Привет! Отправь мне код союзника (9 цифр), чтобы проверить склад.")
+
+@bot.message_handler(func=lambda message: True)
+def handle_message(message):
+    text = message.text.strip().replace('-', '')
+    
+    if text.isdigit() and len(text) == 9:
+        bot.send_message(message.chat.id, "Подключаюсь к swgoh.gg, подожди...")
+        data = get_json(text)
+        
+        if data:
+            player_data = data.get('data', {})
+            name = player_data.get('name', 'Неизвестный')
+            gp = player_data.get('galactic_power', 0)
+            bot.send_message(message.chat.id, f"Успешно!\nИгрок: **{name}**\nГМ: {gp:,}")
+        else:
+            bot.send_message(message.chat.id, "Не удалось получить данные. Проверь код или попробуй позже.")
+    else:
+        bot.send_message(message.chat.id, "Введи корректный код союзника (9 цифр).")
