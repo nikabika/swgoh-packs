@@ -4,7 +4,8 @@ import telebot
 from flask import Flask, request
 
 TOKEN = os.environ.get('TOKEN')
-bot = telebot.TeleBot(TOKEN)
+# КРИТИЧЕСКИЙ ФИКС ДЛЯ VERCEL: threaded=False отключит фоновые потоки
+bot = telebot.TeleBot(TOKEN, threaded=False)
 app = Flask(__name__)
 
 def get_json(ally_code):
@@ -16,12 +17,13 @@ def get_json(ally_code):
             'Referer': 'https://swgoh.gg/'
         }
         
-        response = requests.get(url, headers=headers, timeout=20)
+        # Ограничиваем таймаут до 7 секунд, чтобы уложиться в 10-секундный лимит Vercel
+        response = requests.get(url, headers=headers, timeout=7)
         
         if response.status_code == 200:
             return response.json(), "Успешно! swgoh.gg ответил кодом 200."
         
-        return None, f"Ошибка swgoh.gg!\nСтатус-код: {response.status_code}\nОтвет сервера (первые 200 симв): {response.text[:200]}"
+        return None, f"Ошибка swgoh.gg!\nСтатус-код: {response.status_code}\nОтвет сервера: {response.text[:150]}"
         
     except Exception as e:
         return None, f"Критическая ошибка сети/кода:\n{str(e)}"
@@ -30,7 +32,7 @@ def get_json(ally_code):
 def index():
     webhook_url = f"https://api.telegram.org/bot{TOKEN}/setWebhook?url=https://swgoh-packs.vercel.app/{TOKEN}"
     try:
-        res = requests.get(webhook_url, timeout=10)
+        res = requests.get(webhook_url, timeout=5)
         return f"Ответ от Telegram: {res.text}"
     except Exception as e:
         return f"Ошибка при отправке запроса: {e}"
@@ -40,8 +42,9 @@ def webhook():
     if request.headers.get('content-type') == 'application/json':
         json_string = request.get_data().decode('utf-8')
         update = telebot.types.Update.de_json(json_string)
+        # Обрабатываем синхронно, заставляя Flask ждать завершения
         bot.process_new_updates([update])
-        return ''
+        return 'OK', 200
     else:
         return 'Forbidden', 403
 
@@ -51,22 +54,23 @@ def start_message(message):
 
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
-    text = message.text.strip().replace('-', '')
+    # Заодно чистим не только дефисы, но и случайные пробелы при копировании
+    text = message.text.strip().replace('-', '').replace(' ', '')
     
     if text.isdigit() and len(text) == 9:
-        bot.send_message(message.chat.id, "Проверяю код союзника...")
+        bot.send_message(message.chat.id, "⏳ Проверяю код союзника...")
         
         data, debug_info = get_json(text)
         
-        # Отправляем лог чистым текстом без parse_mode, это на 100% застрахует от крэша телеги
-        bot.send_message(message.chat.id, f" Настройки отладки:\n{debug_info}")
+        # Отправляем технический лог чистым текстом
+        bot.send_message(message.chat.id, f"⚙️ Лог отладки:\n{debug_info}")
         
         if data:
             player_data = data.get('data', {})
             name = player_data.get('name', 'Неизвестный')
             gp = player_data.get('galactic_power', 0)
-            bot.send_message(message.chat.id, f"Данные игрока:\nНик: {name}\nГМ: {gp}")
+            bot.send_message(message.chat.id, f"🏆 Данные игрока:\nНик: {name}\nГМ: {gp:,}")
         else:
-            bot.send_message(message.chat.id, "Данные получить не удалось. Причина в сообщении отладки выше.")
+            bot.send_message(message.chat.id, "⚠️ Данные получить не удалось. Причина написана в логе отладки выше.")
     else:
         bot.send_message(message.chat.id, "Введи корректный код союзника (9 цифр).")
