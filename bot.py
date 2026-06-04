@@ -1,107 +1,120 @@
-import telebot
-import csv
 import os
-from curl_cffi import requests
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+import requests
+import telebot
+from telebot import types
 
-TOKEN = os.environ.get("TOKEN")
-if not TOKEN:
-    print("❌ Токен не найден!")
-    exit()
-
+# Забираем токен из секретов Render
+TOKEN = os.environ.get('TOKEN')
 bot = telebot.TeleBot(TOKEN)
 
-print("📚 Загрузка базы...")
-CSV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'swgoh_counters_5v5_all.csv')
+# Твой стикер из логов
+STICKER_ID = "CAACAgQAAxkBAAFLabBqIBwnSUz-vGApyE_p53Tlu7tAwgAC4hIAAuddKVNvXRcxXhhEwTsE"
 
-counters = []
-with open(CSV_PATH, 'r', encoding='utf-8-sig') as f:
-    reader = csv.DictReader(f, delimiter=';')
-    for row in reader:
-        counters.append({
-            'defender': row.get('Лидер_Защиты_Name', ''),
-            'a1': row.get('Атакующий_1_ID', '').strip(),
-            'a2': row.get('Атакующий_2_ID', '').strip(),
-            'a3': row.get('Атакующий_3_ID', '').strip(),
-            'a4': row.get('Атакующий_4_ID', '').strip(),
-            'a5': row.get('Атакующий_5_ID', '').strip(),
-            'winrate': int(row.get('Винрейт_%', 0) or 0),
-            'season': row.get('Сезон', '')
-        })
-
-print(f"✅ {len(counters)} контр-пиков")
-
-BABY_YODA_STICKER = "CAACAgIAAxkBAAFLZAFqH9yQ3u_cEJspnqed1pFf-FRnnQAChwIAAladvQpC7XQrQFfQkDsE"
+# Временное хранилище состояний пользователей (в оперативной памяти)
+user_states = {}
 
 @bot.message_handler(commands=['start'])
-def start(message):
-    bot.send_sticker(message.chat.id, BABY_YODA_STICKER)
-    bot.send_message(
-        message.chat.id,
-        "🎯 *SWGOH Counter Bot*\n\n"
-        "Привет! Я помогу подобрать лучшие контр-пачки для твоего ростера.\n\n"
-        "📱 Отправь свой *код союзника* (9 цифр):",
-        parse_mode="Markdown"
+def send_welcome(message):
+    chat_id = message.chat.id
+    user_states[chat_id] = 'waiting_for_ally_code'
+    
+    # 1. Отправляем стикер
+    bot.send_sticker(chat_id, STICKER_ID)
+    # 2. Отправляем сообщение вслед (не в ответ)
+    bot.send_message(chat_id, "Отправь мне свой код союзника")
+
+
+@bot.message_handler(func=lambda msg: user_states.get(msg.chat.id) == 'waiting_for_ally_code')
+def handle_ally_code(message):
+    chat_id = message.chat.id
+    raw_text = message.text
+
+    # Очищаем строку: оставляем только цифры
+    ally_code = "".join(filter(str.isdigit, raw_text))
+
+    # Текст ошибки при неверном вводе
+    error_text = (
+        "Ты кажется ошибся. Код союзника можно посмотреть в игре: "
+        "*профиль* —> *в центре внизу, под сводкой арены флота*\n\n"
+        "После этого отправь повторно"
     )
 
-@bot.message_handler(func=lambda m: m.text and len(m.text.strip()) == 9 and m.text.strip().isdigit())
-def handle_allycode(message):
-    allycode = message.text.strip()
-    bot.send_message(message.chat.id, "🔍 Ищу игрока...")
+    if not ally_code:
+        bot.send_message(chat_id, error_text, parse_mode="Markdown")
+        return
+
+    # Отправляем сообщение о поиске (не в ответ)
+    search_msg = bot.send_message(chat_id, "🔍 Ищу твой профиль")
     
+    url = f"https://swgoh.gg/api/player/{ally_code}/"
+
     try:
-        resp = requests.get(f"https://swgoh.gg/api/player/{allycode}/", impersonate="chrome110")
+        response = requests.get(url, timeout=10)
         
-        if resp.status_code != 200:
-            bot.send_message(message.chat.id, "❌ Игрок не найден")
-            return
-        
-        data = resp.json()
-        player = data.get("data", {})
-        player_name = player.get("name", "Игрок")
-        player_level = player.get("level", 0)
-        player_portrait = player.get("portrait_image", "")
-        
-        keyboard = InlineKeyboardMarkup()
-        keyboard.add(
-            InlineKeyboardButton("✅ Да, это я", callback_data=f"yes_{allycode}"),
-            InlineKeyboardButton("❌ Нет, это не я", callback_data="no")
+        if response.status_code == 200:
+            data = response.json()
+            
+            # Достаем имя игрока (в SWGOH API оно обычно сидит в data['data']['name'])
+            player_name = "Игрок"
+            if 'data' in data and isinstance(data['data'], dict):
+                player_name = data['data'].get('name', 'Игрок')
+            elif 'name' in data:
+                player_name = data.get('name', 'Игрок')
+
+            # Создаем инлайн-кнопки в один ряд
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            btn_yes = types.InlineKeyboardButton("Да", callback_data=f"yes_{ally_code}")
+            btn_no = types.InlineKeyboardButton("Нет", callback_data="no")
+            markup.add(btn_yes, btn_no)
+
+            # Меняем текст поискового сообщения на результат
+            bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=search_msg.message_id,
+                text=f"Нашел! {player_name} - это ты?",
+                reply_markup=markup
+            )
+            # Сбрасываем состояние ожидания кода
+            user_states[chat_id] = None
+
+        else:
+            # Если API вернуло не 200 (например, 404 — код не найден)
+            bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=search_msg.message_id,
+                text=error_text,
+                parse_mode="Markdown"
+            )
+
+    except Exception as e:
+        # На случай если swgoh.gg прилег отдохнуть
+        bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=search_msg.message_id,
+            text="⚠️ Что-то пошло не так при запросе к swgoh.gg. Попробуй чуть позже."
+        )
+
+
+@bot.callback_query_handler(func=lambda call: True)
+def handle_buttons(call):
+    chat_id = call.message.chat.id
+    
+    if call.data.startswith("yes_"):
+        ally_code = call.data.split("_")[1]
+        bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=call.message.message_id,
+            text=f"Отлично! Профиль {ally_code} успешно привязан. 🚀"
         )
         
-        if player_portrait:
-            bot.send_photo(
-                message.chat.id,
-                player_portrait,
-                caption=f"👤 *{player_name}*\n⭐ Уровень: *{player_level}*\n\nЭто вы?",
-                parse_mode="Markdown",
-                reply_markup=keyboard
-            )
-        else:
-            bot.send_message(
-                message.chat.id,
-                f"👤 *{player_name}*\n⭐ Уровень: *{player_level}*\n\nЭто вы?",
-                parse_mode="Markdown",
-                reply_markup=keyboard
-            )
-        
-    except Exception as e:
-        bot.send_message(message.chat.id, f"❌ Ошибка: {str(e)[:100]}")
+    elif call.data == "no":
+        user_states[chat_id] = 'waiting_for_ally_code'
+        bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=call.message.message_id,
+            text="Хм, давай попробуем еще раз. Отправь корректный код союзника:"
+        )
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("yes_"))
-def callback_yes(call):
-    allycode = call.data.split("_")[1]
-    bot.answer_callback_query(call.id, "✅ Отлично! Ищу пачки...")
-    bot.send_message(call.message.chat.id, f"🔄 Загружаем данные игрока {allycode}...")
-
-@bot.callback_query_handler(func=lambda call: call.data == "no")
-def callback_no(call):
-    bot.answer_callback_query(call.id, "❌ Отменено")
-    bot.send_message(call.message.chat.id, "Отправь правильный код союзника.")
-
-@bot.message_handler(func=lambda m: True)
-def other(message):
-    bot.send_message(message.chat.id, "Отправь 9-значный код союзника")
-
-if __name__ == "__main__":
-    print("🤖 Бот запущен!")
-    bot.polling(none_stop=True)
+if __name__ == '__main__':
+    print("Бот успешно запущен...")
+    bot.infinity_polling()
