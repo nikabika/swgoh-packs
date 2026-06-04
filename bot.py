@@ -5,12 +5,12 @@ from flask import Flask, request
 
 TOKEN = os.environ.get('TOKEN')
 
-# threaded=False — критично для Vercel
+# threaded=False — критично для Vercel, чтобы микро-лямбда не засыпала раньше времени
 bot = telebot.TeleBot(TOKEN, threaded=False)
 app = Flask(__name__)
 
-# Твоя ссылка на Google Apps Script
-PROXY_URL = "https://script.google.com/macros/s/AKfycbzthYdqRVx3k_Jd5uFybY-OffTup5Qu4kYeG-4dDSvHepMnrCsvpPU_XS9etscixK-y/exec"
+# Твоя СВЕЖАЯ ссылка на Google Apps Script (без маскировки под браузер)
+PROXY_URL = "https://script.google.com/macros/s/AKfycbzxSpO8PJtUXs6PTNptwG9aHK2JQDy3BbFunVbn1b39rNBNy8I8sV_UslLb5scVR3gz/exec"
 
 def get_json_via_proxy(ally_code):
     try:
@@ -18,11 +18,10 @@ def get_json_via_proxy(ally_code):
         response = requests.get(PROXY_URL, params=payload, timeout=8)
         
         if response.status_code == 200:
-            # Безопасный парсинг JSON, чтобы бот не падал при ошибке гугла
             try:
                 res_json = response.json()
             except ValueError:
-                # Если пришёл HTML вместо JSON — выводим его в лог
+                # Если Cloudflare всё равно поймал скрипт — выводим HTML заглушку
                 bad_text = response.text[:200].replace('<', '&lt;').replace('>', '&gt;')
                 return None, f"⚠️ Гугл вернул НЕ JSON!\nСтатус: 200 OK\nОтвет сервера:\n{bad_text}"
             
