@@ -1,134 +1,77 @@
 import telebot
 import os
-import json
-import time
 from curl_cffi import requests
-from curl_cffi.requests import BrowserType
 
 TOKEN = os.environ.get("TOKEN")
 bot = telebot.TeleBot(TOKEN)
 
-# Сессия с постоянными куками
-session = None
-
-def get_session():
-    global session
-    if session is None:
-        # Создаём сессию с полной имитацией браузера
-        session = requests.Session()
-        session.headers.update({
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9,ru;q=0.8',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-            'Sec-Ch-Ua': '"Google Chrome";v="120", "Not?A_Brand";v="8"',
-            'Sec-Ch-Ua-Mobile': '?0',
-            'Sec-Ch-Ua-Platform': '"macOS"',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Upgrade-Insecure-Requests': '1',
-        })
-    return session
-
-@bot.message_handler(commands=['start', 'help'])
-def send_welcome(message):
-    bot.reply_to(
-        message,
-        "🎮 **SWGOH Player Bot**\n\n"
-        "Команда: `/player 431294714`\n"
-        "Получает данные с обходом Cloudflare",
-        parse_mode='Markdown'
-    )
+# Только Safari, разные версии и платформы
+SAFARI_VARIANTS = [
+    "safari15_5",   # Safari 15.5 на macOS Monterey
+    "safari15_3",   # Safari 15.3 на macOS
+    "safari17_0",   # Safari 17.0 на macOS Sonoma (самый новый)
+    "safari_ios",   # Safari на iOS (если поддерживается)
+    "safari15_2",   # Safari 15.2
+]
 
 @bot.message_handler(commands=['player'])
-def get_player_info(message):
+def get_player(message):
     parts = message.text.split()
     if len(parts) < 2:
-        bot.reply_to(message, "❌ Укажите код: `/player 431294714`", parse_mode='Markdown')
+        bot.reply_to(message, "Укажите код: /player 431294714")
         return
     
     ally_code = parts[1]
-    
-    if not ally_code.isdigit():
-        bot.reply_to(message, "❌ Код должен состоять из цифр")
-        return
+    url = f"https://swgoh.gg/api/player/{ally_code}"
     
     bot.send_chat_action(message.chat.id, 'typing')
     
-    # Пробуем разные подходы
-    result = fetch_with_fallback(ally_code)
-    
-    if result["success"]:
-        data = result["data"]
-        response_text = (
-            f"🎮 **{data.get('name', '?')}**\n"
-            f"📊 Уровень: {data.get('level', '?')}\n"
-            f"🔢 Код: {data.get('ally_code', ally_code)}\n"
-            f"🏛️ Гильдия: {data.get('guild_name', '-')}"
-        )
-        bot.reply_to(message, response_text, parse_mode='Markdown')
-    else:
-        bot.reply_to(
-            message,
-            f"❌ Ошибка {result['error']}\n\n"
-            f"💡 Профиль: https://swgoh.gg/p/{ally_code}/",
-            disable_web_page_preview=True
-        )
-
-def fetch_with_fallback(ally_code):
-    """Пробуем разные браузеры и подходы"""
-    
-    url = f"https://swgoh.gg/api/player/{ally_code}"
-    
-    # Список имитаций для перебора
-    impersonates = [
-        "chrome120",
-        "chrome110", 
-        "safari15_5",
-        "edge101",
-        "firefox110",
-    ]
-    
-    for impersonate in impersonates:
+    for safari_version in SAFARI_VARIANTS:
         try:
-            print(f"Пробуем {impersonate}...")
+            print(f"Пробуем Safari: {safari_version}")
             
             response = requests.get(
                 url,
-                impersonate=impersonate,
+                impersonate=safari_version,
                 timeout=45,
-                verify=True,
+                headers={
+                    'User-Agent': get_safari_ua(safari_version),
+                    'Accept': 'application/json, text/plain, */*',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'Connection': 'keep-alive',
+                }
             )
             
             print(f"Статус: {response.status_code}")
             
             if response.status_code == 200:
                 data = response.json()
-                return {"success": True, "data": data}
-            elif response.status_code == 403:
-                continue  # Пробуем следующий браузер
-            elif response.status_code == 404:
-                return {"success": False, "error": "Игрок не найден"}
-            else:
-                continue
+                bot.reply_to(
+                    message,
+                    f"🎮 {data.get('name')}\n📊 Уровень: {data.get('level')}\n\n✅ Обход через {safari_version}"
+                )
+                return
                 
         except Exception as e:
-            print(f"Ошибка с {impersonate}: {e}")
+            print(f"Ошибка {safari_version}: {e}")
             continue
     
-    # Если всё перепробовали
-    return {"success": False, "error": "Cloudflare блокирует (403)"}
+    bot.reply_to(message, "❌ Все варианты Safari заблокированы")
+
+def get_safari_ua(version):
+    """User-Agent для разных версий Safari"""
+    ua_map = {
+        "safari15_5": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.5 Safari/605.1.15",
+        "safari17_0": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+        "safari15_3": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.3 Safari/605.1.15",
+    }
+    return ua_map.get(version, ua_map["safari15_5"])
+
+@bot.message_handler(commands=['start'])
+def start(message):
+    bot.reply_to(message, "Отправь /player 431294714")
 
 if __name__ == "__main__":
-    if not TOKEN:
-        print("❌ Нет токена!")
-        exit(1)
-    
-    print("🚀 Бот запущен с усиленным обходом")
-    print("🔄 Будут перебраны 5 имитаций браузеров")
-    
-    try:
-        bot.infinity_polling(timeout=60)
-    except Exception as e:
-        print(f"Ошибка: {e}")
+    print("🚀 Бот с 5 вариантами Safari")
+    bot.infinity_polling()
